@@ -1,0 +1,511 @@
+# Software (c) 2025, The University of Warwick (the "Software"), comprising of code written in R. 
+#
+# The Software remains the property of the University of Warwick ("the University"). 
+# 
+# The Software is distributed "AS IS" under this Licence solely for non-commercial use, 
+# such as academic research, clinical research, and clinical trials, in the hope that it 
+# will be useful, but in order that the University as a charitable foundation protects 
+# its assets for the benefit of its educational and research purposes, the University  
+# makes clear that no condition is made or to be implied, nor is any warranty given or to  
+# be implied, as to the accuracy of the Software, or that it will be suitable for any  
+# particular purpose or for use under any specific conditions. Furthermore, the University  
+# disclaims all responsibility for the use which is made of the Software. It further  
+# disclaims any liability for the outcomes arising from using the Software. 
+# 
+# The Licensee agrees to indemnify the University and hold the University harmless from  
+# and against any and all claims, damages and liabilities asserted by third parties  
+# (including claims for negligence) which arise directly or indirectly from the use of  
+# the Software. No part of the Software may be reproduced, modified, transmitted or  
+# transferred in any form or by any means, electronic or mechanical, without the  
+# express permission of the University. The permission of the University is not required  
+# if the said reproduction, modification, transmission or transference is done without  
+# financial return, the conditions of this Licence are imposed upon the receiver of the  
+# product, and all original and amended source code is included in any transmitted product.  
+# You may be held legally responsible for any copyright infringement that is caused or  
+# encouraged by your failure to abide by these terms and conditions.
+# 
+# You are not permitted under this Licence to use this Software commercially. Use for which  
+# any financial return is received shall be defined as commercial use, and includes  
+# (1) integration of all or part of the source code or the Software into a product for sale  
+# or license by or on behalf of Licensee to third parties or (2) use of the Software or any  
+# derivative of it for research with the final aim of developing software products for  
+# sale or license to a third party or (3) use of the Software or any derivative of it for  
+# research with the final aim of developing non-software products for sale or license to  
+# a third party, or (4) use of the Software to provide any service to an external organisation  
+# for which payment is received.   
+# 
+# If you are interested in using the Software commercially, please contact Warwick Ventures  
+# Limited ("WVL"), the technology transfer company of the University, to negotiate a licence.  
+# Contact details are: ventures@warwick.ac.uk.  
+#
+# If you are in any doubt if your use constitutes commercial use, contact WVL.
+
+
+library(mvtnorm)
+library(survival)
+
+get.increments <- function(v){c(v[1], diff(v))
+}
+
+
+##################################################################################################
+# Code to find group-sequential boundary for single endpoint
+##################################################################################################
+
+get.p.cross.upper.look <- function(look, I, upper, lower, mean, Sigma)		# gets probability stopping on upper boundary at this look
+{
+  if (look == 1) {
+    pr = 1 - pnorm(upper[1], mean = mean[1], sd = sqrt(Sigma[1,1]))
+  }
+  else {
+    u = c(upper[1:(look-1)],Inf)
+    l = c(lower[1:(look-1)],upper[look])
+    pr = pmvnorm(lower = l, upper = u, mean = mean[1:look], sigma = Sigma[1:look,1:look])[1]
+  }
+pr
+}
+
+get.p.cross.lower.look <- function(look, I, upper, lower, mean, Sigma)		# gets probability stopping on lower boundary at this look
+{
+  if (look == 1) {
+    pr = pnorm(lower[1], mean = mean[1], sd = sqrt(Sigma[1,1]))
+  }
+  else {
+    u = c(upper[1:(look-1)],lower[look])
+    l = c(lower[1:(look-1)],-Inf)
+    pr = pmvnorm(lower = l, upper = u, mean = mean[1:look], sigma = Sigma[1:look,1:look])[1]
+  }
+pr
+}
+
+get.p.cross.upper <- function(I, upper, lower, theta)		# gets probability of crossing upper boundary
+{  
+n.looks = length(I)
+s_mean = theta*I
+s_var = matrix(rep(NA, n.looks^2), ncol=n.looks)
+for (i in seq(1, n.looks))
+  for (j in seq(1,i))
+    s_var[i,j] = s_var[j,i] = I[j]
+
+pr_look = rep(0,n.looks)
+for (look in seq(1,n.looks)) pr_look[look] = get.p.cross.upper.look(look, I, upper, lower, s_mean, s_var)
+  
+sum(pr_look)
+}
+
+
+get.p.cross.lower <- function(I, upper, lower, theta)		# gets probability of crossing lower boundary
+{  
+n.looks = length(I)
+s_mean = theta*I
+s_var = matrix(rep(NA, n.looks^2), ncol=n.looks)
+for (i in seq(1, n.looks))
+  for (j in seq(1,i))
+    s_var[i,j] = s_var[j,i] = I[j]
+
+pr_look = rep(0,n.looks)
+for (look in seq(1,n.looks)) pr_look[look] = get.p.cross.lower.look(look, I, upper, lower, s_mean, s_var)
+  
+sum(pr_look)
+}
+
+
+upper.boundaries.search.fn <- function(upper.value, look, I, upper, lower, target)
+{
+  I = I[1:look]
+  lower = lower[1:look]
+  upper = upper[1:look]
+  upper[look] = upper.value
+  get.p.cross.upper(I, upper, lower, theta=0) - target
+}
+
+
+lower.boundaries.search.fn <- function(lower.value, look, I, upper, lower, target)
+{
+  I = I[1:look]
+  upper = upper[1:look]
+  lower = lower[1:look]
+  lower[look] = lower.value
+  get.p.cross.lower(I, upper, lower, theta=0) - target
+}
+
+
+get.boundary.fixed.I <- function(I, alpha.star.u, alpha.star.l)
+{
+  n.looks = length(I)
+  alpha.star.u.inc = get.increments(alpha.star.u)
+  alpha.star.l.inc = get.increments(alpha.star.l)
+  
+  upper = rep(Inf, n.looks)
+  lower = rep(-Inf, n.looks)
+  for (look in seq(1, n.looks))
+  {
+    if (alpha.star.u.inc[look] > 0) 
+      upper[look] = uniroot(upper.boundaries.search.fn, c(-10,10)*sqrt(I[look]), look, I, upper, lower, target=alpha.star.u[look])$root
+
+    if (alpha.star.l.inc[look] > 0) 
+      lower[look] = uniroot(lower.boundaries.search.fn, c(-10,10)*sqrt(I[look]), look, I, upper, lower, target=alpha.star.l[look])$root
+  }
+  data.frame(I, upper, lower, upper.z = upper/sqrt(I), lower.z = lower/sqrt(I))
+}
+
+
+power.search.fn <- function(I.max,boundary.unscaled,theta,target)
+{
+difference = rep(NA,length(I.max))
+for (i in seq(1,length(I.max)))
+	{
+	I = I.max[i]*boundary.unscaled$I
+	upper = boundary.unscaled$upper*sqrt(I.max/max(boundary.unscaled$I))
+	lower = boundary.unscaled$lower*sqrt(I.max/max(boundary.unscaled$I))
+	difference[i] = get.p.cross.upper(I, upper, lower, theta) - target
+	}
+difference
+}
+
+
+get.boundary <- function(t, alpha.star.u, alpha.star.l, theta, power)
+{
+boundary.unscaled = get.boundary.fixed.I(t, alpha.star.u, alpha.star.l)
+
+I.max = uniroot(power.search.fn, c(1,1000), boundary.unscaled=boundary.unscaled, theta=theta, target=power)$root
+
+scale.factor = I.max/max(boundary.unscaled$I)
+data.frame(I = boundary.unscaled$I*scale.factor, upper = boundary.unscaled$upper*sqrt(scale.factor), lower = boundary.unscaled$lower*sqrt(scale.factor), upper.z = boundary.unscaled$upper.z, lower.z=boundary.unscaled$lower.z)
+}
+
+
+
+
+##################################################################################################
+# Code to find critical values after change of endpoint
+##################################################################################################
+
+
+get.error.prob <- function(look, k.tilde, I.A, I.B, theta.A, rho, upper.A, upper.B)
+{
+
+K = length(I.A)	# assume length(I.A) = length(I.B)
+lower.A = rep(-Inf,K)
+lower.B = rep(-Inf,K)
+
+# get mean and variance-covariance matrix of (S.A, S.B)
+mean.AB = c(theta.A*I.A,0*I.B)
+var.AB = matrix(rep(NA,(2*K)^2),ncol=2*K)
+for (i in seq(1,K)) 
+	for (j in seq(1,i)) 
+		{
+		var.AB[i,j] = var.AB[j,i] = I.A[j]
+		var.AB[K+i,K+j] = var.AB[K+j,K+i] = I.B[j]
+		var.AB[K+i,j] = var.AB[K+j,i] = var.AB[i,K+j] = var.AB[j,K+i] = rho*sqrt(I.A[j]*I.B[j])
+		}
+
+# get probability of rejecting H_0B at this look in different cases depending on whether we are before, at or after k.tilde
+if (look < k.tilde)
+	{
+	if (look==1) 
+		{
+		A.i.stop = 1		# give boundaries for S.A[1] and S.B[1] only
+		B.i.stop = 1
+		lower = c(upper.A[A.i.stop],upper.B[B.i.stop])
+		upper = c(Inf,Inf)
+		mean = mean.AB[c(A.i.stop,K+B.i.stop)]
+		Sigma = var.AB[c(A.i.stop,K+B.i.stop),c(A.i.stop,K+B.i.stop)]
+		prob = pmvnorm(lower,upper,mean=mean,sigma=Sigma)[1]
+		}
+	if (look>1) 
+		{
+		A.i.cont = seq(1,look-1)		# give boundaries for S.A[1],S.A[2],...,S.A[look] and S.B[look] only
+		A.i.stop = look
+		B.i.stop = look
+		lower = c(lower.A[A.i.cont],upper.A[A.i.stop],upper.B[B.i.stop]) 
+		upper = c(upper.A[A.i.cont],Inf,Inf)
+		mean = mean.AB[c(A.i.cont,A.i.stop,K+B.i.stop)]
+		Sigma = var.AB[c(A.i.cont,A.i.stop,K+B.i.stop),c(A.i.cont,A.i.stop,K+B.i.stop)]
+		prob = pmvnorm(lower,upper,mean=mean,sigma=Sigma)[1]
+		}
+	}
+
+if (look == k.tilde)
+	{
+	A.i.cont = seq(1,look-1)		# give boundaries for S.A[1],S.A[2],...,S.A[look] and S.B[look] only
+	B.i.stop = look
+	lower = c(lower.A[A.i.cont],upper.B[B.i.stop]) 
+	upper = c(upper.A[A.i.cont],Inf)
+	mean = mean.AB[c(A.i.cont,K+B.i.stop)]
+	Sigma = var.AB[c(A.i.cont,K+B.i.stop),c(A.i.cont,K+B.i.stop)]
+	prob = pmvnorm(lower,upper,mean=mean,sigma=Sigma)[1]
+	}
+
+if (look > k.tilde)
+	{
+	A.i.cont = seq(1,k.tilde-1)		# give boundaries for S.A[1],S.A[2],...,S.A[look] and S.B[look] only
+	B.i.cont = seq(k.tilde,look-1)
+	B.i.stop = look
+	lower = c(lower.A[A.i.cont],lower.B[B.i.cont],upper.B[B.i.stop]) 
+	upper = c(upper.A[A.i.cont],upper.B[B.i.cont],Inf)
+	mean = mean.AB[c(A.i.cont,K+B.i.cont,K+B.i.stop)]
+	Sigma = var.AB[c(A.i.cont,K+B.i.cont,K+B.i.stop),c(A.i.cont,K+B.i.cont,K+B.i.stop)]
+	prob = pmvnorm(lower,upper,mean=mean,sigma=Sigma)[1]
+	}
+
+prob
+}
+
+
+max.error.fn <- function(theta.A, look, k.tilde, I.A, I.B, rho, upper.A, upper.B)
+{
+answer = rep(NA,length(theta.A))
+for (i in seq(1,length(theta.A))) 
+	{
+	answer[i] = 0 
+	for (k in seq(1,look)) answer[i]=answer[i] + get.error.prob(k, k.tilde, I.A, I.B, theta.A[i], rho, upper.A, upper.B)
+	}
+answer
+}
+
+#	if (k.tilde==2) if (look==2) 
+#	{
+#	rho2=rho*sqrt(I.B[1]/I.B[2])
+#	num1 = (upper.B[2]/sqrt(I.B[2]) - rho2*upper.A[1]/sqrt(I.A[1])) / sqrt(1-rho2^2)
+#	num2 = (upper.B[1]/sqrt(I.B[1]) - rho*upper.A[1]/sqrt(I.A[1])) / sqrt(1-rho^2)
+#	den = sqrt(I.A[1]) * ( rho/sqrt(1-rho^2) - rho2/sqrt(1-rho2^2) )
+#	theta.A.star = (num1 - num2)/den
+#	}
+
+
+get.max.error.search <- function(upper.B.look, look, k.tilde, I.A, I.B, rho, upper.A, upper.B, target, return.theta.A=F)	# first argument is upper.B[look] for searching
+{
+difference = rep(NA,length(upper.B.look))
+theta.A.star = rep(NA,length(upper.B.look))
+
+for (i in seq(1,length(upper.B.look)))
+{
+upper.B[look] = upper.B.look[i]
+
+if (look==1) 
+	{
+	theta.A.star[i] = 100
+	max.error = max.error.fn(theta.A.star, look, k.tilde, I.A, I.B, rho, upper.A, upper.B)		# theta.A = infinity
+	}
+else 
+	{
+	optimise.output  = optimise(max.error.fn,interval=c(-3,3),look, k.tilde, I.A=I.A, I.B=I.B, rho=rho, upper.A=upper.A, upper.B=upper.B, maximum=T)
+	theta.A.star[i] = optimise.output$maximum
+	max.error = optimise.output$objective
+	}
+
+difference[i] = max.error - target
+}
+
+if (return.theta.A) output=data.frame(difference,theta.A.star)
+else output=difference
+output
+}
+
+
+
+
+##################################################################################################
+# Single trial example with binary and survival data
+##################################################################################################
+
+
+get.S.I.binary <- function(succ,treatment)
+{
+n.tot = length(treatment)
+n.1 = sum(treatment)
+n.0 = n.tot-n.1
+
+s.0 = sum(succ[treatment==0])
+s.1 = sum(succ[treatment==1])
+
+S = (n.0*s.1 - n.1*s.0) / n.tot
+I = n.1*n.0*(s.1+s.0)*(n.tot-s.1-s.0)/(n.tot^3)
+data.frame(S,I)
+}
+
+get.S.I.surv <- function(times,status,treatment)
+{
+surv.out = survdiff(Surv(times,status)~treatment)	# log rank test
+cox.out = coxph(Surv(times,status)~treatment)		# Cox regression (to give direction of effect)
+I = surv.out$var[1,1]
+S = sign(cox.out$coef) * sqrt(surv.out$chisq * I)
+data.frame(S,I)
+}
+
+
+get.cor.bootstrap <- function(treatment,succ,times,status,n.sample = 1000)
+{
+d = seq(1,28)
+S.A.sample = S.B.sample = rep(NA,n.sample)
+
+for (sample in seq(1,n.sample))
+	{
+	sample.0 = sample(seq(1,length(treatment))[treatment==0], replace=T)
+	sample.1 = sample(seq(1,length(treatment))[treatment==1], replace=T)
+
+	treatment.sample = c( rep(0,length(sample.0)), rep(1,length(sample.1)) )
+
+	succ.sample = succ[c(sample.0,sample.1)]
+	times.sample = times[c(sample.0,sample.1)]
+	status.sample = status[c(sample.0,sample.1)]
+	
+	S.I.A = get.S.I.binary(succ.sample,treatment.sample)
+	S.A.sample[sample] = S.I.A$S
+
+	S.I.B = get.S.I.surv(times.sample,status.sample,treatment.sample)
+	S.B.sample[sample] = S.I.B$S
+	}
+
+cor(S.A.sample,S.B.sample)
+}
+
+
+set.seed(5)
+
+t = seq(1,5)/5
+K = length(t)
+alpha.star.u = 0.025*t
+alpha.star.l = rep(0,K)
+
+p.0.target = 0.5
+p.1.target = 0.58
+theta = log(p.1.target*(1-p.0.target) / ((1-p.1.target)*p.0.target ) )		# treatment effect for endpoint A under simulation model
+power = 0.9
+
+boundary = get.boundary(t, alpha.star.u, alpha.star.l, theta, power)
+boundary
+
+I.max = boundary$I[K]
+p.bar = (p.0.target+p.1.target)/2
+n.total = 2*I.max/(p.bar*(1-p.bar))		# required sample size per group in total
+n = round( t*n.total)				# required sample size per group at each look
+n.inc = get.increments(n)
+
+S.A = I.A = rep(NA,length(t))
+S.B = I.B = rep(NA,length(t))
+
+# read simulated data
+
+directory = "H:/Documents/my folders/2020 files on H/grant applications/mrc application - pandemic study design/paper 2/saved code/"
+filename = paste(directory,"gs design with change of endpoint - example - data set.txt",sep='')
+
+example.data.set = read.table(filename,header=T,sep=',')
+looks = 1*example.data.set$interim.analysis
+treatment = 1*example.data.set$treatment
+succ = 1*example.data.set$success
+times = 1*example.data.set$recovery.time
+status = 1*example.data.set$recovery
+
+for (look in seq(1,max(looks)))
+{
+S.I.A = get.S.I.binary(succ[looks<=look],treatment[looks<=look])
+S.A[look] = S.I.A$S
+I.A[look] = S.I.A$I
+
+S.I.B = get.S.I.surv(times[looks<=look],status[looks<=look],treatment[looks<=look])
+S.B[look] = S.I.B$S
+I.B[look] = S.I.B$I
+}
+
+num.success = rep(NA,K*2)
+dim(num.success) = c(2,K)
+for (look in seq(1,K)) for (t.val in seq(0,1)) num.success[t.val+1,look] = sum(succ[(treatment==t.val)*(looks<=look)==1])
+
+# get boundaries
+
+k.tilde = 5
+k.tilde = 2
+
+stop.A = 0
+stop.time = 0
+for (look in seq(1,k.tilde-1))
+{
+if (stop.A ==0)
+	{
+	alpha.star.u[look] = 0.025*I.A[look]/I.max
+	if (alpha.star.u[look] > 0.025) alpha.star.u[look]=0.025
+
+	boundary = get.boundary.fixed.I(I.A[1:look],alpha.star.u[1:look],alpha.star.l=rep(0,look))
+
+	upper.A = boundary$upper
+	lower.A = boundary$lower
+	if (S.A[look] >= upper.A[look]) 
+		{
+		stop.A =1
+		stop.time=look
+		}
+	}
+}
+
+# table for paper
+k.range = seq(1,k.tilde-1)
+if (stop.time > 0) k.range = seq(1,stop.time)
+data.frame(k=k.range,succ.0=num.success[1,k.range],succ.1=num.success[2,k.range],I.A=round(I.A[k.range],2),upper.A=round(upper.A[k.range],1),upper.A.z=round(upper.A[k.range]/sqrt(I.A[k.range]),2),S.A=round(S.A[k.range],1))
+
+
+rho = upper.B = theta.A.star = check.diff = rep(NA,K)
+
+I.B.max = https://url.uk.m.mimecastprotect.com/s/5SNCCk6XrhA38Wu2fBcGYrv9?domain=n.total		# expected max information is d/4 (here we have n.total per arm with no censoring)
+I.B.max = 0.4 * https://url.uk.m.mimecastprotect.com/s/5SNCCk6XrhA38Wu2fBcGYrv9?domain=n.total	# assume 40% mortality
+
+
+alpha.star.u = 0.025*I.B/I.B.max
+
+stop = 0
+rej.B = 0
+for (look in seq(1,K))
+{
+if (stop==0)
+	{
+	# estimate rho using all available data from stop.time or k.tilde as this is first time S.B is used
+	if (stop.time == 0) 
+		{
+		if (look == 1) rho[look] = get.cor.bootstrap(treatment[looks<=k.tilde],succ[looks<=k.tilde],times[looks<=k.tilde],status[looks<=k.tilde])
+		if (look <= k.tilde) rho[look]=rho[1]
+		if (look > k.tilde) rho[look] = get.cor.bootstrap(treatment[looks<=look],succ[looks<=look],times[looks<=look],status[looks<=look])
+		}
+	if (stop.time > 0)
+		{
+		if (look == 1) rho[look] = get.cor.bootstrap(treatment[looks<=stop.time],succ[looks<=stop.time],times[looks<=stop.time],status[looks<=stop.time])
+		rho[look]=rho[1]
+		}
+
+	target = alpha.star.u[look]
+	upper.B[look] = uniroot(get.max.error.search,c(-5,5)*sqrt(I.B[look]), look=look, k.tilde=k.tilde, I.A=I.A, I.B=I.B, rho=rho[look], upper.A=upper.A, upper.B=upper.B, 	target=target)$root
+	search.output = get.max.error.search(upper.B[look], look=look, k.tilde=k.tilde, I.A=I.A, I.B=I.B, rho=rho[look], upper.A=upper.A, upper.B=upper.B, target=target, return.theta.A=T)
+	check.diff[look] = search.output$difference
+	theta.A.star[look] = search.output$theta.A.star
+
+	if (look == stop.time) 
+		{
+		stop=1
+		if (S.B[look] > upper.B[look]) rej.B=1 
+		}
+	if (look >= k.tilde) if (S.B[look] > upper.B[look]) 
+		{
+		stop=1
+		rej.B=1 
+		stop.time = look
+		}
+	}
+}
+
+
+num.recov = rep(NA,K*2)
+dim(num.recov) = c(2,K)
+for (look in seq(1,stop.time)) for (t.val in seq(0,1)) num.recov[t.val+1,look]=sum(status[(looks<=look)*(treatment==t.val)==1])
+
+
+# table for paper
+data.frame(look=seq(1,stop.time),recov.0=num.recov[1,1:stop.time],recov.1=num.recov[2,1:stop.time],I.B=round(I.B[1:stop.time],2),rho=round(rho[1:stop.time],3),theta.A.star=round(theta.A.star[1:stop.time],4),upper.B=round(upper.B[1:stop.time],1),upper.B.z=round(upper.B[1:stop.time]/sqrt(I.B[1:stop.time]),2),S.B=round(S.B[1:stop.time],2))
+
+surv.out = survdiff(Surv(times[looks<=look],status[looks<=look])~treatment[looks<=look])	# log rank test
+km = survfit(Surv(times[looks<=look],status[looks<=look])~treatment[looks<=look])
+
+plot(c(1,28),c(0,0.5),type='n',xlab='Days', ylab='Recovery probability')
+lines(c(0,km$time[1:km$strata[1]]),c(0,1-km$surv[1:km$strata[1]]),type='s')
+lines(c(0,km$time[(km$strata[1]+1):(km$strata[1]+km$strata[2])]),c(0,1-km$surv[(km$strata[1]+1):(km$strata[1]+km$strata[2])]),type='s',lty=2)
+
+
