@@ -388,7 +388,7 @@ S.B = I.B = rep(NA,length(t))
 
 # read simulated data
 
-directory = "H:/Documents/my folders/2020 files on H/grant applications/mrc application - pandemic study design/paper 2/saved code/"
+directory = ""  # insert directory for data set here
 filename = paste(directory,"gs design with change of endpoint - example - data set.txt",sep='')
 
 example.data.set = read.table(filename,header=T,sep=',')
@@ -447,8 +447,8 @@ data.frame(k=k.range,succ.0=num.success[1,k.range],succ.1=num.success[2,k.range]
 
 rho = upper.B = theta.A.star = check.diff = rep(NA,K)
 
-I.B.max = https://url.uk.m.mimecastprotect.com/s/5SNCCk6XrhA38Wu2fBcGYrv9?domain=n.total		# expected max information is d/4 (here we have n.total per arm with no censoring)
-I.B.max = 0.4 * https://url.uk.m.mimecastprotect.com/s/5SNCCk6XrhA38Wu2fBcGYrv9?domain=n.total	# assume 40% mortality
+I.B.max = n.total/2                    # expected max information is d/4 (here we have n.total per arm with no censoring)
+I.B.max = 0.4 * n.total/2              # assume 40% mortality
 
 
 alpha.star.u = 0.025*I.B/I.B.max
